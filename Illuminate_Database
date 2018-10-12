@@ -1,0 +1,331 @@
+
+    #region 数据库DB
+    use Illuminate\Container\Container;
+    use Illuminate\Database\Capsule\Manager as Capsule;
+    use Illuminate\Database\Capsule\Manager as DbHelper;
+
+    class DbProvider {
+        /**
+         * DbProvider constructor.
+         */
+        public static function postComment(array $data)
+        {
+            self::init();
+
+            return DbHelper::table('line_comments')->insertGetId($data);
+        }
+        public static function postOrderAdd(array $data)
+        {
+            self::init();
+            #region 线路信息 批次信息
+            $line = DbHelper::table('lines')->find($data['line_id']);
+            if ($line == null) {
+                return -99;
+            }
+            $line = collect($line)->toArray();
+            $lineItem = DbHelper::table('line_items')->find($data['line_item_id']);
+            if ($lineItem == null) {
+                return -88;
+            }
+            $lineItem = collect($lineItem)->toArray();
+            if ($lineItem['line_id'] != $data['line_id']) {
+                return -87;
+            }
+            if ($lineItem['date_start'] <= date('Y - m - d')) {
+                return -86;
+            }
+            #endregion
+            #region 查询订单
+            if ($data['uid'] != 1) {
+                $isExistOrder = DbHelper::table('orders')->where(['user_id' => $data['uid'], 'line_item_id' => $data['line_item_id']])->count();
+                if ($isExistOrder > 0) {
+                    return -85;
+                }
+            }
+            #endregion
+            #region 省份 - 城市
+            if ($data['pri_id'] != 1) {
+                $data['pri_name'] = '北京市';
+            } else {
+                //查询缓存
+                $data['pri_name'] = RedisHelper::getCacheProCityInfo($data['pri_id']);
+            }
+            if ($data['city_id'] != 47) {
+                $data['city_name'] = '通州区';
+            } else {
+                //查询缓存
+                $data['city_name'] = RedisHelper::getCacheProCityInfo($data['city_id']);
+            }
+            if ($data['card_no'] != '150429198701010101') {
+                $data['address'] = RedisHelper::getCacheIDCardInfo($data['card_no']);
+            }
+            #endregion
+            #region 个人会员信息
+            $memberInfo = DbHelper::table('members')->where(['name' => $data['username'], 'mobile' => $data['mobile']])->first();
+            if ($memberInfo != null) {
+                $member = collect($memberInfo)->toArray();
+            } else {
+                $member = [];
+                $member['user_id'] = $data['uid'];
+                if ($member['user_id'] == null || $member['user_id'] == '') {
+                    $member['user_id'] = 1;
+                }
+                $member['username'] = $data['u_name'];
+                if ($member['username'] == null || $member['username'] == '') {
+                    $member['username'] = 'sys';
+                }
+                $member['card_id'] = $data['card_id'] ?? 6;
+                $member['name'] = $data['username'];
+                $member['email'] = $data['email'] ?? '';
+                $member['mobile'] = $data['mobile'];
+                $member['tel'] = $data['tel'] ?? '';
+                $member['card_no'] = $data['card_no'] ?? '';
+                $member['gender'] = $data['gender'] ?? 1;//性别(0:女、1：男)
+                $member['is_adult'] = $data['is_adult'] ?? 1;//是否成年(0：未成年、1：成年)
+                $member['pri_id'] = $data['pri_id'] ?? 1;
+                $member['city_id'] = $data['city_id'] ?? 47;
+                $member['pri_name'] = $data['pri_name'] ?? '北京市';
+                $member['city_name'] = $data['city_name'] ?? '通州区';
+                $member['life_pri_id'] = $data['life_pri_id'] ?? 1;
+                $member['life_city_id'] = $data['life_city_id'] ?? 47;
+                $member['life_pri_name'] = $data['life_pri_name'] ?? '北京市';
+                $member['life_city_name'] = $data['life_city_name'] ?? '通州区';
+                $member['address'] = $data['address'] ?? '北京市通州区';
+                $member['qq'] = $data['qq'] ?? '';
+                $member['weixin'] = $data['weixin'] ?? '';
+                $member['weibo'] = $data['weibo'] ?? '';
+                $member['alipay'] = $data['alipay'] ?? '';
+                $member['company'] = $data['company'] ?? '';
+                $member['birthday'] = $data['birthday'] ?? '1990-01-01';
+                $member['remark'] = $data['remark'] ?? '';
+                $member['created_at'] = date('Y-m-d H:i:s');
+                $member['updated_at'] = date('Y-m-d H:i:s');
+                $member['id'] = DbHelper::table('members')->insertGetId($member);
+            }
+            #endregion
+            #region 订单 主表
+            $order = [];
+            $order['user_id'] = $member['user_id'];
+            $order['username'] = $member['username'];
+            $order['member_id'] = $member['id'];
+            $order['order_no'] = rand(10000, 99999) . str_random(15) . rand(10000, 99999) . str_random(7);
+            $order['line_id'] = $data['line_id'];
+            $order['line_subject'] = $line['titile'] . $line['subject'];
+            $order['line_item_id'] = $lineItem['id'];
+            $order['line_item_number'] = $lineItem['number'];
+            $order['img'] = $line['img_pc'];
+            if ((int)$lineItem['adult_price'] == -1) {
+                $small_title = $lineItem['number'] . ' & nbsp;' . substr($lineItem['date_start'], 5, 5) . ' & nbsp;至 & nbsp;' . substr($lineItem['date_end'], 5, 5) . ' & nbsp;核算中';
+            } else {
+                $small_title = $lineItem['number'] . ' & nbsp;' . substr($lineItem['date_start'], 5, 5) . ' & nbsp;至 & nbsp;' . substr($lineItem['date_end'], 5, 5) . ' & nbsp;' . $lineItem['adult_price'] . '元';
+            }
+            $order['line_item_title'] = $small_title;
+            $order['date_start'] = $lineItem['date_start'];
+            $order['date_end'] = $lineItem['date_end'];
+            $order['week_start'] = $lineItem['week_start'];
+            $order['week_end'] = $lineItem['week_end'];
+            $order['days'] = $lineItem['days'];
+            $order['apply_price'] = $lineItem['apply_price'];
+            $order['adult_price'] = $lineItem['adult_price'];
+            $order['child_price'] = $lineItem['child_price'];
+            $order['single_bed_price'] = $lineItem['single_bed_price'];//单房差价格
+            $order['single_bed_count'] = $data['order']['single_bed_count'] ?? 0;//单房差人数
+            //本批次不开启单房差功能
+            if ($lineItem['single_bed_price'] < 1) {
+                $order['single_bed_price'] = 0;
+                $order['is_bed_price'] = 0;
+                $order['single_bed_count'] = 0;
+                $order['total_bed_price'] = 0;
+            } else {
+                $order['single_bed_price'] = $lineItem['single_bed_price'];
+                if ($order['single_bed_count'] > 0) {
+                    $order['is_bed_price'] = 1;//是否单房差
+                    $order['total_bed_price'] = (int)$order['single_bed_price'] * $order['single_bed_count'];//单房差总费用
+                } else {
+                    $order['is_bed_price'] = 0;//是否单房差
+                    $order['total_bed_price'] = 0;//单房差总费用
+                }
+            }
+            $order['price_add'] = 0;
+            $order['price_del'] = 0;
+            $order['men'] = $data['order']['men'];
+            $order['women'] = $data['order']['women'];
+            $order['child'] = $data['order']['child'];
+            //不支持儿童报名
+            if ($lineItem['child_price'] < 0) {
+                $order['child_price'] = 0;
+                $order['child'] = 0;
+            }
+            $order['total'] = $order['men'] + $order['women'] + $order['child'];
+            $order['status'] = 0;//订单状态(0：未审核[默认]、1：审核通过、2：替补、3：关闭、4：申请退款、5：退款成功)
+            $order['payment_status'] = 0;//付款状态：0未付款(默认)、1：全额付款、2：已付报名费、3：退款
+            $order['sys_payment_status'] = -1;//费用确认状态：-1未收到付款、1：已收到付款、-2：未收到报名费、2:已收到报名费、-3:未收到尾款、3：已收到尾款
+            $order['type'] = 0;
+            $order['order_source'] = 1;//订单来源(1:PC线上报名、2:H5线上报名、3：APP报名、4：PC线下报名
+            $order['mobile'] = $data['mobile'];
+            $order['message'] = $data['order']['message'] ?? '';
+            $order['ip'] = $data['ip'];
+            $order['created_at'] = date('Y-m-d H:i:s');
+            $order['updated_at'] = date('Y-m-d H:i:s');
+            $order['deleted_at'] = null;
+            #endregion
+            #region 订单 明细
+            $orderItem = [];
+            $orderItem['member_id'] = $member['id'];
+            $orderItem['username'] = $data['username'];
+            $orderItem['mobile'] = $data['mobile'];
+            $orderItem['tel'] = $data['tel'] ?? '';
+            $orderItem['card_no'] = $data['card_no'] ?? '';
+            $orderItem['birthday'] = $member['birthday'];
+            $orderItem['gender'] = $member['gender'];
+            $orderItem['is_adult'] = $member['is_adult'];
+            $orderItem['is_master'] = 1;
+            if ($lineItem['single_bed_price'] < 1) {
+                $orderItem['is_single_bed'] = 0;
+            } else {
+                if ($order['single_bed_count'] > 0) {
+                    $orderItem['is_single_bed'] = 1;
+                } else {
+                    $orderItem['is_single_bed'] = 0;
+                }
+            }
+            $orderItem['pri_id'] = $member['pri_id'];
+            $orderItem['city_id'] = $member['city_id'];
+            $orderItem['pri_name'] = $member['pri_name'];
+            $orderItem['city_name'] = $member['city_name'];
+            $orderItem['address'] = $member['address'];
+            $orderItem['remark'] = $member['remark'];
+            $orderItem['created_at'] = date('Y-m-d H:i:s');
+            $orderItem['updated_at'] = date('Y-m-d H:i:s');
+            #endregion
+            #region 订单 付款明细
+            /** 1：报名费支付 */
+            $pay1 = [];
+            $pay1['payment_no'] = rand(100000, 999999) . str_random(14) . rand(10000, 99999) . str_random(7);
+            $pay1['payment_type'] = 1;//付款类型(1：报名费支付)
+            $pay1['payment_status'] = 0;//付款状态：0未付款(默认)、1：已付款
+            $pay1['out_payment_source'] = 0;//支付方式(1：微信支付、2：支付宝支付、3：线下银行汇款、4：其他
+            $pay1['out_payment_no'] = str_random(32);
+            $pay1['out_payment_fee'] = '';
+            $pay1['out_payment_time'] = '';
+            $pay1['created_at'] = date('Y-m-d H:i:s');
+            $pay1['updated_at'] = date('Y-m-d H:i:s');
+            /** 2：尾款支付 */
+            $pay2 = [];
+            $pay2['payment_no'] = rand(10000, 99999) . str_random(13) . rand(100000, 999999) . str_random(8);
+            $pay2['payment_type'] = 2;//付款类型(2：尾款支付)
+            $pay2['payment_status'] = 0;//付款状态：0未付款(默认)、1：已付款
+            $pay2['out_payment_source'] = 0;//支付方式(1：微信支付、2：支付宝支付、3：线下银行汇款、4：其他
+            $pay2['out_payment_no'] = str_random(32);
+            $pay2['out_payment_fee'] = '';
+            $pay2['out_payment_time'] = '';
+            $pay2['created_at'] = date('Y-m-d H:i:s');
+            $pay2['updated_at'] = date('Y-m-d H:i:s');
+            /** 3：全额付款 */
+            $pay3 = [];
+            $pay3['payment_no'] = rand(100000, 999999) . str_random(12) . rand(10000, 99999) . str_random(9);
+            $pay3['payment_type'] = 3;//付款类型(3：全额付款)
+            $pay3['payment_status'] = 0;//付款状态：0未付款(默认)、1：已付款
+            $pay3['out_payment_source'] = 0;//支付方式(1：微信支付、2：支付宝支付、3：线下银行汇款、4：其他
+            $pay3['out_payment_no'] = str_random(32);
+            $pay3['out_payment_fee'] = '';
+            $pay3['out_payment_time'] = '';
+            $pay3['created_at'] = date('Y-m-d H:i:s');
+            $pay3['updated_at'] = date('Y-m-d H:i:s');
+            if ((int)$lineItem['adult_price'] > 0) {
+                if ((int)$lineItem['child_price'] > -1) {
+                    //3：全额付款
+                    $pay3['fee'] = (($order['men'] + $order['women']) * (int)$lineItem['adult_price']) + ($order['child'] * (int)$lineItem['child_price']);
+                } else {
+                    $pay3['fee'] = (($order['men'] + $order['women']) * (int)$lineItem['adult_price']);
+                }
+                $pay3['fee'] += $order['total_bed_price']; //总金额 + 单房差
+                $pay1['fee'] = $order['total'] * (int)$lineItem['apply_price'];//金额 1：报名费支付
+                $pay2['fee'] = $pay3['fee'] - $pay1['fee'];//金额 2：尾款支付
+            } elseif ((int)$lineItem['adult_price'] == 0) {
+                $pay1['fee'] = 0;//金额 1：报名费支付
+                $pay2['fee'] = 0;//金额 2：尾款支付
+                $pay3['fee'] = 0;//金额 3：全额付款
+            } else {
+                $pay1['fee'] = 99999.99;//金额 1：报名费支付
+                $pay2['fee'] = 99999.99;//金额 2：尾款支付
+                $pay3['fee'] = 99999.99;//金额 3：全额付款
+            }
+            #endregion
+            #region 订单 日志
+            #endregion
+            #region 更新缓存
+            #endregion
+            #region 开启数据事务
+            DbHelper::transaction(function () use ($order, $orderItem, $pay1, $pay2, $pay3) {
+                $order_id = DbHelper::table('orders')->insertGetId($order);
+                $orderItem['order_id'] = $order_id;
+                DbHelper::table('order_details')->insert($orderItem);
+                $pay1['order_id'] = $order_id;
+                DbHelper::table('order_payments')->insert($pay1);
+                $pay2['order_id'] = $order_id;
+                DbHelper::table('order_payments')->insert($pay2);
+                $pay3['order_id'] = $order_id;
+                DbHelper::table('order_payments')->insert($pay3);
+            });
+
+            return $order['order_no'];
+            #endregion
+        }
+        /**
+         * 线路收藏
+         *
+         * @param $data
+         *
+         * @return int
+         */
+        public static function postFavorites($data, $id = 0)
+        {
+            self::init();
+            if ($id == 0) {
+                DbHelper::table('line_favorites')->insert($data);
+            } else {
+                DbHelper::table('line_favorites')->delete($id);
+            }
+            $items = DbHelper::table('line_favorites')->select(['id', 'line_id', 'subject'])->where('uid', $data['uid'])->get();
+            RedisHelper::setCache('favorites:' . $data['uid'], collect($items)->toArray());
+
+            return true;
+        }
+        public static function test()
+        {
+            self::init();
+            $order = Order::all();
+            dd($order);
+        }
+        private static function init()
+        {
+            $capsule = new Capsule;
+            $capsule->addConnection(['driver' => 'mysql', 'host' => '127.0.0.1', 'database' => 'xxk', 'username' => 'root', 'password' => '', 'charset' => 'utf8', 'collation' => 'utf8_unicode_ci', 'prefix' => 'gr_',]);
+            $capsule->setAsGlobal();// 设置全局静态可访问
+            $capsule->bootEloquent(); // 启动Eloquent
+        }
+    }
+
+    #endregion
+    #region Models
+    class Order extends \Illuminate\Database\Eloquent\Model {
+        protected $table = 'orders';
+    }
+
+    class OrderDetail extends \Illuminate\Database\Eloquent\Model {
+        protected $table = 'order_details';
+    }
+
+    class OrderPayment extends \Illuminate\Database\Eloquent\Model {
+        protected $table = 'order_payments';
+    }
+
+    class LineComment extends \Illuminate\Database\Eloquent\Model {
+        protected $table = 'line_comments';
+    }
+
+    class LineFavorites extends \Illuminate\Database\Eloquent\Model {
+        protected $table = 'line_favorites';
+    }
+    #endregion
